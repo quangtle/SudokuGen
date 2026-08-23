@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sudoku Generator</title>
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --line: #333;
+    --line-light: #bbb;
+    --accent: #2563eb;
+    --bg: #f5f6f8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    margin: 0;
+    padding: 16px;
+  }
+
+  /* ---------- Controls ---------- */
+  .controls {
+    max-width: 900px;
+    margin: 0 auto 20px;
+    background: #fff;
+    border-radius: 10px;
+    padding: 16px 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.08);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: flex-end;
+  }
+  .controls label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .controls select {
+    padding: 8px 10px;
+    border: 1px solid var(--line-light);
+    border-radius: 6px;
+    font-size: 14px;
+    min-width: 130px;
+  }
+  .controls button {
+    padding: 9px 18px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    color: #fff;
+    background: var(--accent);
+  }
+  .controls button.secondary { background: #555; }
+  .controls button:hover { filter: brightness(1.1); }
+  .status { width: 100%; font-size: 13px; color: #555; min-height: 18px; }
+
+  /* ---------- Solver panel ---------- */
+  .solver {
+    max-width: 900px;
+    margin: 0 auto 20px;
+    background: #fff;
+    border-radius: 10px;
+    padding: 14px 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.08);
+  }
+  .solver summary { cursor: pointer; font-weight: 600; }
+  .solver .row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .solver input {
+    flex: 1;
+    min-width: 220px;
+    padding: 8px 10px;
+    border: 1px solid var(--line-light);
+    border-radius: 6px;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 13px;
+  }
+  .solver button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  #decodedSolutions { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 16px; }
+
+  /* ---------- Puzzle sheets ---------- */
+  #sheets { max-width: 900px; margin: 0 auto; }
+  .sheet {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 28px;
+    background: #fff;
+    padding: 24px;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.08);
+    margin-bottom: 20px;
+  }
+  .puzzle { text-align: center; }
+  .puzzle h3 { margin: 0 0 8px; font-size: 15px; }
+  table.sudoku {
+    border-collapse: collapse;
+    margin: 0 auto;
+  }
+  table.sudoku td {
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--line-light);
+    text-align: center;
+    font-size: 17px;
+    font-family: Georgia, serif;
+    user-select: none;
+  }
+  table.sudoku td.b-right { border-right: 2px solid var(--line); }
+  table.sudoku td.b-bottom { border-bottom: 2px solid var(--line); }
+  table.sudoku td.given { font-weight: 700; }
+  .qrwrap { margin-top: 8px; }
+  .qrwrap img {
+    display: block;
+    margin: 0 auto;
+    image-rendering: pixelated;
+  }
+  .hint { font-size: 11px; color: #888; margin-top: 2px; }
+
+  /* ---------- Print ---------- */
+  @media print {
+    body { background: #fff; padding: 0; }
+    .controls, .solver, .no-print { display: none !important; }
+    .sheet {
+      box-shadow: none;
+      border-radius: 0;
+      padding: 10mm;
+      margin: 0;
+      page-break-after: always;
+    }
+    .sheet:last-child { page-break-after: auto; }
+  }
+</style>
+</head>
+<body>
+
+<div class="controls">
+  <label>Difficulty
+    <select id="difficulty">
+      <option value="easy">Easy</option>
+      <option value="medium" selected>Medium</option>
+      <option value="hard">Hard</option>
+      <option value="expert">Expert</option>
+    </select>
+  </label>
+  <label>Games per page
+    <select id="perPage">
+      <option value="1">1</option>
+      <option value="2">2</option>
+      <option value="4" selected>4</option>
+      <option value="6">6</option>
+    </select>
+  </label>
+  <label>Pages
+    <select id="pages">
+      <option value="1" selected>1</option>
+      <option value="2">2</option>
+      <option value="3">3</option>
+      <option value="5">5</option>
+    </select>
+  </label>
+  <button id="generateBtn">Generate</button>
+  <button id="printBtn" class="secondary">Print</button>
+  <div class="status" id="status"></div>
+</div>
+
+<details class="solver">
+  <summary>Solution lookup — paste a solution number</summary>
+  <div class="row">
+    <input id="solInput" placeholder="Paste solution number">
+    <button id="decodeBtn">Show solution</button>
+  </div>
+  <div id="decodedSolutions"></div>
+</details>
+
+<div id="sheets"></div>
+
+<script src="qrcode.min.js"></script>
+<script>
+"use strict";
+
+/* ============================================================
+   Sudoku engine
+
+   Grid model : Int8Array(81), 0 = empty, 1..9 = digit
+   Row r, col c -> index r*9+c ; box = Math.floor(r/3)*3 + Math.floor(c/3)
+
+   Solution encoding ("solution number"):
+   Only VALID solution grids are encoded, so structural
+   redundancy is exploited: every row is a permutation of 1..9.
+   Each row is ranked with its Lehmer code (rank in 0..9!-1),
+   giving 9 ranks packed into one big integer:
+       value = sum( rank[row] * (9!)^row )   // max ~2^167
+   The integer is rendered in base64url (6 bits per char):
+       ceil(9 * log2(9!) / 6) = 28 chars max.
+   Nothing about the puzzle/solution is stored anywhere else —
+   the number alone fully determines the solution grid.
+   ============================================================ */
+
+// URL-safe base64 alphabet (no padding needed)
+const B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+// Factorials 0..9 for Lehmer-code ranking
+const FACT = [1n, 1n, 2n, 6n, 24n, 120n, 720n, 5040n, 40320n, 362880n];
+const ROW_SPACE = FACT[9]; // 9! possible row permutations
+
+const ALL = 0x1FF; // 9 candidate bits
+
+// Precompute peers & units for fast constraint propagation
+const ROW_PEERS = [], COL_PEERS = [], BOX_PEERS = [];
+for (let i = 0; i < 81; i++) {
+  const r = (i / 9) | 0, c = i % 9;
+  const row = [], col = [], box = [];
+  for (let j = 0; j < 81; j++) {
+    if (j !== i && ((j / 9) | 0) === r) row.push(j);
+    if (j !== i && j % 9 === c) col.push(j);
+    if (j !== i && ((j / 27) | 0) === ((r / 3) | 0) &&
+        (((j % 9) / 3) | 0) === ((c / 3) | 0)) box.push(j);
+  }
+  ROW_PEERS.push(row); COL_PEERS.push(col); BOX_PEERS.push(box);
+}
+
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/* --- Fast bitmask backtracking solver ---------------------- */
+
+// Solve into `out` (first solution). Returns true if solvable.
+function solveFirst(cells, out) {
+  const grid = cells.slice();
+  if (!propagate(grid)) return false;
+  return search(grid, out);
+}
+
+function propagate(grid) {
+  // Simple repeated elimination pass; returns false on contradiction
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < 81; i++) {
+      const v = grid[i];
+      if (v > 0) continue;
+      let cand = ALL;
+      for (const p of ROW_PEERS[i]) if (grid[p] > 0) cand &= ~(1 << (grid[p] - 1));
+      for (const p of COL_PEERS[i]) if (grid[p] > 0) cand &= ~(1 << (grid[p] - 1));
+      for (const p of BOX_PEERS[i]) if (grid[p] > 0) cand &= ~(1 << (grid[p] - 1));
+      if (cand === 0) return false;
+      if ((cand & (cand - 1)) === 0) { // single candidate
+        grid[i] = 32 - Math.clz32(cand); // bit position -> digit
+        changed = true;
+      }
+    }
+  }
+  return true;
+}
+
+function search(grid, out) {
+  if (!propagate(grid)) return false;
+  let best = -1, bestCand = 0, bestCount = 10;
+  for (let i = 0; i < 81; i++) {
+    if (grid[i] > 0) continue;
+    let cand = ALL;
+    for (const p of ROW_PEERS[i]) if (grid[p] > 0) cand &= ~(1 << (grid[p] - 1));
+    for (const p of COL_PEERS[i]) if (grid[p] > 0) cand &= ~(1 << (grid[p] - 1));
+    for (const p of BOX_PEERS[i]) if (grid[p] > 0) cand &= ~(1 << (grid[p] - 1));
+    const n = popcount(cand);
+    if (n < bestCount) { bestCount = n; best = i; bestCand = cand; if (n <= 2) break; }
+  }
+  if (best === -1) { out.set(grid); return true; } // solved
+  let cand = bestCand;
+  while (cand) {
+    const bit = cand & -cand;
+    cand ^= bit;
+    const trial = grid.slice();
+    trial[best] = 32 - Math.clz32(bit);
+    if (search(trial, out)) return true;
+  }
+  return false;
+}
+
+function popcount(x) {
+  x = x - ((x >> 1) & 0x55555555);
+  x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+  return (((x + (x >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
+}
+
+// Count solutions up to `limit` (used for uniqueness check)
+function countSolutions(cells, limit) {
+  const grid = cells.slice();
+  if (!propagate(grid)) return 0;
+  let count = 0;
+  (function dfs(g) {
+    if (count >= limit) return;
+    let best = -1, bestCand = 0, bestCount = 10;
+    for (let i = 0; i < 81; i++) {
+      if (g[i] > 0) continue;
+      let cand = ALL;
+      for (const p of ROW_PEERS[i]) if (g[p] > 0) cand &= ~(1 << (g[p] - 1));
+      for (const p of COL_PEERS[i]) if (g[p] > 0) cand &= ~(1 << (g[p] - 1));
+      for (const p of BOX_PEERS[i]) if (g[p] > 0) cand &= ~(1 << (g[p] - 1));
+      const n = popcount(cand);
+      if (n === 0) return;
+      if (n < bestCount) { bestCount = n; best = i; bestCand = cand; if (n <= 1) break; }
+    }
+    if (best === -1) { count++; return; }
+    let cand = bestCand;
+    while (cand && count < limit) {
+      const bit = cand & -cand;
+      cand ^= bit;
+      const trial = g.slice();
+      trial[best] = 32 - Math.clz32(bit);
+      dfs(trial);
+    }
+  })(grid);
+  return count;
+}
+
+/* --- Generation --------------------------------------------- */
+
+function generateSolved() {
+  const grid = new Int8Array(81);
+  // Fill diagonal boxes randomly first (independent), then solve rest
+  for (let b = 0; b < 9; b += 3) {
+    const digits = shuffle([1,2,3,4,5,6,7,8,9]);
+    for (let dr = 0; dr < 3; dr++)
+      for (let dc = 0; dc < 3; dc++)
+        grid[(b + dr) * 9 + b + dc] = digits[dr * 3 + dc];
+  }
+  const out = new Int8Array(81);
+  if (!search(grid, out)) throw new Error("generation failed");
+  return out;
+}
+
+// Clue targets per difficulty (fewer clues = harder)
+const DIFFICULTY_CLUES = { easy: 42, medium: 34, hard: 29, expert: 25 };
+
+function generatePuzzle(difficulty) {
+  const solution = generateSolved();
+  const puzzle = solution.slice();
+  const target = DIFFICULTY_CLUES[difficulty];
+  const order = shuffle([...Array(81).keys()]);
+  let clues = 81;
+
+  for (const idx of order) {
+    if (clues <= target) break;
+    const saved = puzzle[idx];
+    puzzle[idx] = 0;
+    // Symmetric partner removal for aesthetics (optional attempt)
+    let removedExtra = false;
+    const mirror = 80 - idx;
+    if (puzzle[mirror] !== 0 && clues - 2 >= target - 4) {
+      const mSaved = puzzle[mirror];
+      puzzle[mirror] = 0;
+      if (countSolutions(puzzle, 2) === 1) {
+        clues -= 2;
+        removedExtra = true;
+      } else {
+        puzzle[mirror] = mSaved;
+      }
+    }
+    if (!removedExtra) {
+      if (countSolutions(puzzle, 2) === 1) clues--;
+      else puzzle[idx] = saved;
+    }
+  }
+  return { puzzle, solution };
+}
+
+/* --- Bitwise solution encoding ------------------------------- */
+
+// Rank a permutation of 1..9 via its Lehmer code (0..9!-1)
+function rankRow(row) {
+  const avail = [1,2,3,4,5,6,7,8,9];
+  let rank = 0n;
+  for (let i = 0; i < 9; i++) {
+    const pos = avail.indexOf(row[i]);
+    if (pos < 0) throw new Error("Row is not a permutation of 1-9");
+    rank += BigInt(pos) * FACT[8 - i];
+    avail.splice(pos, 1);
+  }
+  return rank;
+}
+
+// Inverse of rankRow
+function unrankRow(rank) {
+  let r = BigInt(rank);
+  const avail = [1,2,3,4,5,6,7,8,9];
+  const row = new Int8Array(9);
+  for (let i = 0; i < 9; i++) {
+    const f = FACT[8 - i];
+    const pos = Number(r / f);
+    r %= f;
+    row[i] = avail[pos];
+    avail.splice(pos, 1);
+  }
+  return row;
+}
+
+// Pack the 9 row ranks into a BigInt, then base64url
+function encodeSolution(sol) {
+  let n = 0n;
+  for (let r = 0; r < 9; r++) {
+    n = n * ROW_SPACE + rankRow(sol.slice(r * 9, r * 9 + 9));
+  }
+  let out = "";
+  while (n > 0n) {
+    out = B64URL[Number(n & 63n)] + out;
+    n >>= 6n;
+  }
+  return out || "A";
+}
+
+function decodeSolution(str) {
+  str = str.trim();
+  let n = 0n;
+  for (const ch of str) {
+    const v = B64URL.indexOf(ch);
+    if (v < 0) throw new Error("Invalid character: " + ch);
+    n = (n << 6n) | BigInt(v);
+  }
+  const sol = new Int8Array(81);
+  for (let r = 8; r >= 0; r--) {
+    const rank = n % ROW_SPACE;
+    n /= ROW_SPACE;
+    sol.set(unrankRow(rank), r * 9);
+  }
+  if (n !== 0n) throw new Error("Corrupted solution number");
+  return sol;
+}
+
+/* --- Rendering ------------------------------------------------ */
+
+function buildTable(cells, showGivens) {
+  const tbl = document.createElement("table");
+  tbl.className = "sudoku";
+  for (let r = 0; r < 9; r++) {
+    const tr = tbl.insertRow();
+    for (let c = 0; c < 9; c++) {
+      const td = tr.insertCell();
+      const v = cells[r * 9 + c];
+      if (v > 0) {
+        td.textContent = v;
+        if (showGivens) td.className = "given";
+      }
+      if (c === 2 || c === 5) td.classList.add("b-right");
+      if (r === 2 || r === 5) td.classList.add("b-bottom");
+    }
+  }
+  return tbl;
+}
+
+function renderPuzzles(list) {
+  const sheetsEl = document.getElementById("sheets");
+  sheetsEl.innerHTML = "";
+  const perPage = parseInt(document.getElementById("perPage").value, 10);
+
+  for (let s = 0; s < list.length; s += perPage) {
+    const sheet = document.createElement("div");
+    sheet.className = "sheet";
+    list.slice(s, s + perPage).forEach((item, k) => {
+      const num = s + k + 1;
+      const div = document.createElement("div");
+      div.className = "puzzle";
+      const h = document.createElement("h3");
+      h.textContent = "#" + num;
+      div.appendChild(h);
+      div.appendChild(buildTable(item.puzzle, true));
+
+      // QR code containing a URL whose hash holds the encoded solution.
+      // Opening it shows the full solution page (works offline too).
+      const qrWrap = document.createElement("div");
+      qrWrap.className = "qrwrap";
+      const solURL = location.origin + location.pathname + "#s=" + encodeSolution(item.solution);
+      const qr = qrcode(0, "M");
+      qr.addData(solURL);
+      qr.make();
+      const cell = 2, margin = 0;
+      const size = qr.getModuleCount() * cell + margin * 2;
+      const img = document.createElement("img");
+      img.src = qr.createDataURL(cell, margin);
+      img.width = size; img.height = size;
+      img.alt = "Solution QR code";
+      qrWrap.appendChild(img);
+
+      const cap = document.createElement("div");
+      cap.className = "hint";
+      cap.textContent = "scan for solution";
+      qrWrap.appendChild(cap);
+      div.appendChild(qrWrap);
+
+      sheet.appendChild(div);
+    });
+    sheetsEl.appendChild(sheet);
+  }
+}
+
+function statusMsg(msg) {
+  document.getElementById("status").textContent = msg;
+}
+
+/* --- Wire-up --------------------------------------------------- */
+
+document.getElementById("generateBtn").addEventListener("click", () => {
+  const difficulty = document.getElementById("difficulty").value;
+  const perPage = parseInt(document.getElementById("perPage").value, 10);
+  const pages = parseInt(document.getElementById("pages").value, 10);
+  const total = perPage * pages;
+
+  statusMsg("Generating " + total + " puzzle" + (total > 1 ? "s" : "") + "…");
+
+  // Defer so the status message paints before the (blocking) work
+  setTimeout(() => {
+    const t0 = performance.now();
+    const list = [];
+    for (let i = 0; i < total; i++) {
+      const { puzzle, solution } = generatePuzzle(difficulty);
+      list.push({ puzzle, solution });
+    }
+    renderPuzzles(list);
+    statusMsg(total + " " + difficulty + " puzzle" + (total > 1 ? "s" : "") +
+      " generated in " + ((performance.now() - t0) / 1000).toFixed(1) + "s.");
+  }, 30);
+});
+
+document.getElementById("printBtn").addEventListener("click", () => window.print());
+
+document.getElementById("decodeBtn").addEventListener("click", () => {
+  const out = document.getElementById("decodedSolutions");
+  out.innerHTML = "";
+  try {
+    const sol = decodeSolution(document.getElementById("solInput").value);
+    const wrap = document.createElement("div");
+    wrap.className = "puzzle";
+    wrap.appendChild(buildTable(sol, false));
+    out.appendChild(wrap);
+  } catch (e) {
+    out.textContent = "⚠ " + e.message;
+  }
+});
+
+/* --- Solution view: #s=<encoded solution> ---------------------- */
+// The URL itself carries the solution; nothing is stored server-side.
+(function showSolutionFromHash() {
+  const m = location.hash.match(/^#s=([A-Za-z0-9\-_]+)$/);
+  if (!m) return;
+  document.querySelector(".controls").style.display = "none";
+  document.querySelector(".solver").style.display = "none";
+  const sheets = document.getElementById("sheets");
+  sheets.innerHTML = "";
+  const sheet = document.createElement("div");
+  sheet.className = "sheet";
+  const div = document.createElement("div");
+  div.className = "puzzle";
+  const h = document.createElement("h3");
+  h.textContent = "Solution";
+  div.appendChild(h);
+  try {
+    div.appendChild(buildTable(decodeSolution(m[1]), false));
+  } catch (e) {
+    const err = document.createElement("p");
+    err.textContent = "Invalid solution code: " + e.message;
+    div.appendChild(err);
+  }
+  sheet.appendChild(div);
+  sheets.appendChild(sheet);
+})();</script>
+</body>
+</html>
