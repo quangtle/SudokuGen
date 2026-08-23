@@ -380,9 +380,10 @@ function lockedCandidates(cands) {
       for (const i of box) if (cands[i] & bit) { rows |= 1 << ((i / 9) | 0); cols |= 1 << (i % 9); }
       if (popcount(rows) === 1 || popcount(cols) === 1) {
         const inBox = i => ((((i / 9) | 0) / 3 | 0) * 3 + ((i % 9) / 3 | 0)) === b;
+        // rows are UNITS[0..8], columns are UNITS[9..17]
         const line = popcount(rows) === 1
-          ? UNITS[9 + (31 - Math.clz32(rows))]
-          : UNITS[(31 - Math.clz32(cols))];
+          ? UNITS[31 - Math.clz32(rows)]
+          : UNITS[9 + (31 - Math.clz32(cols))];
         for (const i of line)
           if (!inBox(i) && (cands[i] & bit)) { cands[i] &= ~bit; progress = true; }
       }
@@ -420,41 +421,37 @@ function findSubsets(unit, cands, k) {
   return found;
 }
 
-// Tier 3: naked & hidden pairs/triples
-function subsetsTier3(grid, cands) {
+// Naked & hidden subsets of size k in every unit
+function subsetPass(grid, cands, k) {
   let progress = false;
   for (const unit of UNITS) {
-    // Naked pairs/triples
-    for (const k of [2, 3]) {
-      for (const set of findSubsets(unit, cands, k)) {
-        const merged = set.reduce((m, i) => m | cands[i], 0);
-        for (const i of unit)
-          if (!set.includes(i) && (cands[i] & merged)) { cands[i] &= ~merged; progress = true; }
-      }
+    // Naked subsets
+    for (const set of findSubsets(unit, cands, k)) {
+      const merged = set.reduce((m, i) => m | cands[i], 0);
+      for (const i of unit)
+        if (!set.includes(i) && (cands[i] & merged)) { cands[i] &= ~merged; progress = true; }
     }
-    // Hidden pairs/triples
-    for (const k of [2, 3]) {
-      const digitsPresent = [];
-      for (let d = 1; d <= 9; d++) {
-        const bit = 1 << (d - 1);
-        let n = 0;
-        for (const i of unit) if (cands[i] & bit) n++;
-        if (n >= 2 && n <= k) digitsPresent.push({ d, bit, n });
-      }
-      (function combos(start, cur) {
-        if (cur.length === k) {
-          const cells = new Set();
-          for (const x of cur) for (const i of unit) if (cands[i] & x.bit) cells.add(i);
-          if (cells.size === k) {
-            const keep = cur.reduce((m, x) => m | x.bit, 0);
-            for (const i of cells)
-              if (cands[i] & ~keep) { cands[i] &= keep; progress = true; }
-          }
-          return;
+    // Hidden subsets
+    const digitsPresent = [];
+    for (let d = 1; d <= 9; d++) {
+      const bit = 1 << (d - 1);
+      let n = 0;
+      for (const i of unit) if (cands[i] & bit) n++;
+      if (n >= 2 && n <= k) digitsPresent.push({ d, bit, n });
+    }
+    (function combos(start, cur) {
+      if (cur.length === k) {
+        const cells = new Set();
+        for (const x of cur) for (const i of unit) if (cands[i] & x.bit) cells.add(i);
+        if (cells.size === k) {
+          const keep = cur.reduce((m, x) => m | x.bit, 0);
+          for (const i of cells)
+            if (cands[i] & ~keep) { cands[i] &= keep; progress = true; }
         }
-        for (let j = start; j < digitsPresent.length; j++) { cur.push(digitsPresent[j]); combos(j + 1, cur); cur.pop(); }
-      })(0, []);
-    }
+        return;
+      }
+      for (let j = start; j < digitsPresent.length; j++) { cur.push(digitsPresent[j]); combos(j + 1, cur); cur.pop(); }
+    })(0, []);
   }
   return progress;
 }
@@ -496,9 +493,14 @@ function xWing(cands) {
   return progress;
 }
 
-// Rate a puzzle: returns 1..4 (tier), or 0 on contradiction.
-// maxTier caps escalation (used during digging): stops early once exceeded.
-function rateDifficulty(puzzle, maxTier = 4) {
+// Rate a puzzle: returns the hardest technique tier needed:
+//   1 = naked/hidden singles
+//   2 = locked candidates (pointing/claiming)
+//   3 = naked/hidden pairs
+//   4 = naked/hidden triples
+//   5 = X-Wing
+//   0 = not solvable with these techniques (needs guessing/chains)
+function rateDifficulty(puzzle) {
   const grid = puzzle.slice();
   const cands = computeCands(grid);
   let tier = 0;
@@ -506,8 +508,9 @@ function rateDifficulty(puzzle, maxTier = 4) {
     [1, () => nakedSingles(grid, cands)],
     [1, () => hiddenSingles(grid, cands)],
     [2, () => lockedCandidates(cands)],
-    [3, () => subsetsTier3(grid, cands)],
-    [4, () => xWing(cands)],
+    [3, () => subsetPass(grid, cands, 2)],
+    [4, () => subsetPass(grid, cands, 3)],
+    [5, () => xWing(cands)],
   ];
   let solved = false;
   while (!solved) {
@@ -515,7 +518,7 @@ function rateDifficulty(puzzle, maxTier = 4) {
     for (const [t, fn] of steps) {
       if (fn()) { tier = Math.max(tier, t); progressed = true; break; }
     }
-    if (!progressed) break; // stuck: needs guessing -> beyond tier 4
+    if (!progressed) break; // stuck: needs guessing -> beyond tier 5
     solved = grid.every(v => v > 0);
   }
   return solved ? tier : 0;
@@ -540,36 +543,63 @@ function generateSolved() {
 // Target technique tiers per difficulty
 const DIFFICULTY_TIER = { easy: 1, medium: 2, hard: 3, expert: 4 };
 
+// Digging budget per attempt (rating is the expensive part)
+const DIG_BUDGET_MS = 400;
+
 function generatePuzzle(difficulty) {
   const solution = generateSolved();
-  const puzzle = solution.slice();
   const targetTier = DIFFICULTY_TIER[difficulty];
-  const order = shuffle([...Array(81).keys()]);
 
-  for (const idx of order) {
-    const saved = puzzle[idx];
-    puzzle[idx] = 0;
-    // Symmetric partner removal for aesthetics (optional attempt)
-    let removedExtra = false;
-    const mirror = 80 - idx;
-    if (puzzle[mirror] !== 0) {
-      const mSaved = puzzle[mirror];
-      puzzle[mirror] = 0;
-      if (countSolutions(puzzle, 2) === 1 && inTier(puzzle, targetTier)) {
-        removedExtra = true;
-      } else {
-        puzzle[mirror] = mSaved;
-      }
+  // Multiple digging attempts with different random seeds; keep the best.
+  const attempts = targetTier <= 1 ? 1 : 5;
+  let best = null;
+  for (let a = 0; a < attempts; a++) {
+    const cand = digOnce(solution, targetTier);
+    if (!best || cand.tier > best.tier ||
+        (cand.tier === best.tier && cand.clues < best.clues)) {
+      best = cand;
     }
-    if (!removedExtra) {
-      if (countSolutions(puzzle, 2) === 1 && inTier(puzzle, targetTier)) {
-        // keep removal
-      } else {
-        puzzle[idx] = saved;
-      }
-    }
+    if (best.tier >= targetTier) break; // goal reached
   }
-  return { puzzle, solution };
+  return { puzzle: best.puzzle, solution };
+}
+
+// One directed digging pass. At each step, sample up to SAMPLES random
+// remaining clues and remove the one that yields the highest rating
+// (still unique + within tier). This escapes the greedy local minima that
+// plain sequential digging hits.
+function digOnce(solution, targetTier) {
+  const puzzle = solution.slice();
+  let clues = 81;
+  const deadline = Date.now() + DIG_BUDGET_MS;
+  const SAMPLES = 8;
+
+  while (clues > 20 && Date.now() < deadline) {
+    // Collect removable candidate cells
+    const filled = [];
+    for (let i = 0; i < 81; i++) if (puzzle[i] !== 0) filled.push(i);
+    shuffle(filled);
+    const sample = filled.slice(0, Math.min(SAMPLES, filled.length));
+
+    let bestIdx = -1, bestTier = -1, bestClues = clues;
+    for (const idx of sample) {
+      const saved = puzzle[idx];
+      puzzle[idx] = 0;
+      if (countSolutions(puzzle, 2) === 1) {
+        const t = rateDifficulty(puzzle);
+        if (t >= 1 && t <= targetTier && (t > bestTier || (t === bestTier))) {
+          // prefer higher tier; among equal tiers keep first found (fewer clues)
+          if (t > bestTier) { bestTier = t; bestIdx = idx; }
+        }
+      }
+      puzzle[idx] = saved;
+    }
+    if (bestIdx === -1) break; // no sampled removal works; stop this pass
+    puzzle[bestIdx] = 0;
+    clues--;
+  }
+  const tier = rateDifficulty(puzzle);
+  return { puzzle, tier, clues };
 }
 
 // True when the puzzle is solvable purely by logic within the given tier
