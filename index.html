@@ -62,37 +62,6 @@
   .controls button:hover { filter: brightness(1.1); }
   .status { width: 100%; font-size: 13px; color: #555; min-height: 18px; }
 
-  /* ---------- Solver panel ---------- */
-  .solver {
-    max-width: 900px;
-    margin: 0 auto 20px;
-    background: #fff;
-    border-radius: 10px;
-    padding: 14px 20px;
-    box-shadow: 0 2px 8px rgba(0,0,0,.08);
-  }
-  .solver summary { cursor: pointer; font-weight: 600; }
-  .solver .row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-  .solver input {
-    flex: 1;
-    min-width: 220px;
-    padding: 8px 10px;
-    border: 1px solid var(--line-light);
-    border-radius: 6px;
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 13px;
-  }
-  .solver button {
-    padding: 8px 16px;
-    border: none;
-    border-radius: 6px;
-    background: var(--accent);
-    color: #fff;
-    cursor: pointer;
-    font-weight: 600;
-  }
-  #decodedSolutions { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 16px; }
-
   /* ---------- Puzzle sheets ---------- */
   #sheets { max-width: 900px; margin: 0 auto; }
   .sheet {
@@ -135,7 +104,7 @@
   /* ---------- Print ---------- */
   @media print {
     body { background: #fff; padding: 0; }
-    .controls, .solver, .no-print { display: none !important; }
+    .controls, .no-print { display: none !important; }
     .sheet {
       box-shadow: none;
       border-radius: 0;
@@ -178,15 +147,6 @@
   <button id="printBtn" class="secondary">Print</button>
   <div class="status" id="status"></div>
 </div>
-
-<details class="solver">
-  <summary>Solution lookup — paste a solution number</summary>
-  <div class="row">
-    <input id="solInput" placeholder="Paste solution number">
-    <button id="decodeBtn">Show solution</button>
-  </div>
-  <div id="decodedSolutions"></div>
-</details>
 
 <div id="sheets"></div>
 
@@ -544,27 +504,12 @@ document.getElementById("generateBtn").addEventListener("click", () => {
 
 document.getElementById("printBtn").addEventListener("click", () => window.print());
 
-document.getElementById("decodeBtn").addEventListener("click", () => {
-  const out = document.getElementById("decodedSolutions");
-  out.innerHTML = "";
-  try {
-    const sol = decodeSolution(document.getElementById("solInput").value);
-    const wrap = document.createElement("div");
-    wrap.className = "puzzle";
-    wrap.appendChild(buildTable(sol, false));
-    out.appendChild(wrap);
-  } catch (e) {
-    out.textContent = "⚠ " + e.message;
-  }
-});
-
 /* --- Solution view: #s=<encoded solution> ---------------------- */
 // The URL itself carries the solution; nothing is stored server-side.
 (function showSolutionFromHash() {
   const m = location.hash.match(/^#s=([A-Za-z0-9\-_]+)$/);
   if (!m) return;
   document.querySelector(".controls").style.display = "none";
-  document.querySelector(".solver").style.display = "none";
   const sheets = document.getElementById("sheets");
   sheets.innerHTML = "";
   const sheet = document.createElement("div");
