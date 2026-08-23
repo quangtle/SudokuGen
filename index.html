@@ -295,6 +295,232 @@ function countSolutions(cells, limit) {
   return count;
 }
 
+/* --- Technique-based difficulty rating ------------------------ */
+// Solves the puzzle using only human-style logical techniques,
+// escalating in power. Returns the hardest technique tier needed:
+//   1 = easy   (naked/hidden singles)
+//   2 = medium (locked candidates: pointing/claiming)
+//   3 = hard   (naked/hidden pairs & triples)
+//   4 = expert (X-Wing; beyond that, guessing would be required)
+// Returns 0 if the grid is contradictory.
+
+const UNITS = []; // 27 units (9 rows, 9 cols, 9 boxes), each an array of 9 cell indices
+for (let r = 0; r < 9; r++) UNITS.push([...Array(9).keys()].map(c => r * 9 + c));
+for (let c = 0; c < 9; c++) UNITS.push([...Array(9).keys()].map(r => r * 9 + c));
+for (let b = 0; b < 9; b++) {
+  const br = ((b / 3) | 0) * 3, bc = (b % 3) * 3, u = [];
+  for (let dr = 0; dr < 3; dr++) for (let dc = 0; dc < 3; dc++) u.push((br + dr) * 9 + bc + dc);
+  UNITS.push(u);
+}
+const CELL_UNITS = []; // indices into UNITS for each cell
+for (let i = 0; i < 81; i++) {
+  CELL_UNITS.push([i % 9, 9 + (i / 9 | 0), 18 + (((i / 9) | 0) / 3 | 0) * 3 + ((i % 9) / 3 | 0)]);
+}
+
+function computeCands(grid) {
+  const cands = new Int16Array(81);
+  for (let i = 0; i < 81; i++) {
+    if (grid[i] > 0) { cands[i] = 1 << (grid[i] - 1); continue; }
+    let m = ALL;
+    for (const p of ROW_PEERS[i]) if (grid[p] > 0) m &= ~(1 << (grid[p] - 1));
+    for (const p of COL_PEERS[i]) if (grid[p] > 0) m &= ~(1 << (grid[p] - 1));
+    for (const p of BOX_PEERS[i]) if (grid[p] > 0) m &= ~(1 << (grid[p] - 1));
+    cands[i] = m;
+  }
+  return cands;
+}
+
+function place(grid, cands, i, d) {
+  const bit = 1 << (d - 1);
+  grid[i] = d;
+  cands[i] = bit;
+  for (const p of [...ROW_PEERS[i], ...COL_PEERS[i], ...BOX_PEERS[i]]) {
+    cands[p] &= ~bit;
+  }
+}
+
+// Tier 1a: naked single — cell with exactly one candidate
+function nakedSingles(grid, cands) {
+  let progress = false;
+  for (let i = 0; i < 81; i++) {
+    if (grid[i] === 0 && popcount(cands[i]) === 1) {
+      place(grid, cands, i, 32 - Math.clz32(cands[i]));
+      progress = true;
+    }
+  }
+  return progress;
+}
+
+// Tier 1b: hidden single — digit fits only one cell in a unit
+function hiddenSingles(grid, cands) {
+  let progress = false;
+  for (const unit of UNITS) {
+    for (let d = 1; d <= 9; d++) {
+      const bit = 1 << (d - 1);
+      let spot = -1, count = 0;
+      for (const i of unit) {
+        if (grid[i] === d) { count = -1; break; }
+        if (grid[i] === 0 && (cands[i] & bit)) { spot = i; count++; }
+      }
+      if (count === 1) { place(grid, cands, spot, d); progress = true; }
+    }
+  }
+  return progress;
+}
+
+// Tier 2: locked candidates — pointing & claiming
+function lockedCandidates(cands) {
+  let progress = false;
+  // Pointing: digit in box confined to one row/col -> eliminate from rest of line
+  for (let b = 0; b < 9; b++) {
+    const box = UNITS[18 + b];
+    for (let d = 1; d <= 9; d++) {
+      const bit = 1 << (d - 1);
+      let rows = 0, cols = 0;
+      for (const i of box) if (cands[i] & bit) { rows |= 1 << ((i / 9) | 0); cols |= 1 << (i % 9); }
+      if (popcount(rows) === 1 || popcount(cols) === 1) {
+        const inBox = i => ((((i / 9) | 0) / 3 | 0) * 3 + ((i % 9) / 3 | 0)) === b;
+        const line = popcount(rows) === 1
+          ? UNITS[9 + (31 - Math.clz32(rows))]
+          : UNITS[(31 - Math.clz32(cols))];
+        for (const i of line)
+          if (!inBox(i) && (cands[i] & bit)) { cands[i] &= ~bit; progress = true; }
+      }
+    }
+  }
+  // Claiming: digit in line confined to one box -> eliminate from rest of box
+  for (let u = 0; u < 18; u++) {
+    const line = UNITS[u];
+    for (let d = 1; d <= 9; d++) {
+      const bit = 1 << (d - 1);
+      let boxes = 0;
+      for (const i of line) if (cands[i] & bit) boxes |= 1 << ((((i / 9) | 0) / 3 | 0) * 3 + ((i % 9) / 3 | 0));
+      if (popcount(boxes) === 1) {
+        const box = UNITS[18 + (31 - Math.clz32(boxes))];
+        for (const i of box)
+          if (!line.includes(i) && (cands[i] & bit)) { cands[i] &= ~bit; progress = true; }
+      }
+    }
+  }
+  return progress;
+}
+
+// Helper: find all k-subsets within a unit sharing the same candidate set
+function findSubsets(unit, cands, k) {
+  const cells = unit.filter(i => popcount(cands[i]) >= 2 && popcount(cands[i]) <= k);
+  const found = [];
+  (function pick(start, cur) {
+    if (cur.length === k) {
+      const merged = cur.reduce((m, i) => m | cands[i], 0);
+      if (popcount(merged) === k) found.push(cur.slice());
+      return;
+    }
+    for (let j = start; j < cells.length; j++) { cur.push(cells[j]); pick(j + 1, cur); cur.pop(); }
+  })(0, []);
+  return found;
+}
+
+// Tier 3: naked & hidden pairs/triples
+function subsetsTier3(grid, cands) {
+  let progress = false;
+  for (const unit of UNITS) {
+    // Naked pairs/triples
+    for (const k of [2, 3]) {
+      for (const set of findSubsets(unit, cands, k)) {
+        const merged = set.reduce((m, i) => m | cands[i], 0);
+        for (const i of unit)
+          if (!set.includes(i) && (cands[i] & merged)) { cands[i] &= ~merged; progress = true; }
+      }
+    }
+    // Hidden pairs/triples
+    for (const k of [2, 3]) {
+      const digitsPresent = [];
+      for (let d = 1; d <= 9; d++) {
+        const bit = 1 << (d - 1);
+        let n = 0;
+        for (const i of unit) if (cands[i] & bit) n++;
+        if (n >= 2 && n <= k) digitsPresent.push({ d, bit, n });
+      }
+      (function combos(start, cur) {
+        if (cur.length === k) {
+          const cells = new Set();
+          for (const x of cur) for (const i of unit) if (cands[i] & x.bit) cells.add(i);
+          if (cells.size === k) {
+            const keep = cur.reduce((m, x) => m | x.bit, 0);
+            for (const i of cells)
+              if (cands[i] & ~keep) { cands[i] &= keep; progress = true; }
+          }
+          return;
+        }
+        for (let j = start; j < digitsPresent.length; j++) { cur.push(digitsPresent[j]); combos(j + 1, cur); cur.pop(); }
+      })(0, []);
+    }
+  }
+  return progress;
+}
+
+// Tier 4: X-Wing (rows & cols)
+function xWing(cands) {
+  let progress = false;
+  for (let d = 1; d <= 9; d++) {
+    const bit = 1 << (d - 1);
+    // Row-based: two rows where digit has exactly 2 spots, aligned columns
+    const rowSpots = [], colSpots = [];
+    for (let r = 0; r < 9; r++) {
+      const cs = UNITS[r].filter(i => cands[i] & bit).map(i => i % 9);
+      if (cs.length === 2) rowSpots.push(cs);
+    }
+    for (let c = 0; c < 9; c++) {
+      const rs = UNITS[9 + c].filter(i => cands[i] & bit).map(i => (i / 9) | 0);
+      if (rs.length === 2) colSpots.push(rs);
+    }
+    for (let a = 0; a < rowSpots.length; a++)
+      for (let b = a + 1; b < rowSpots.length; b++)
+        if (rowSpots[a][0] === rowSpots[b][0] && rowSpots[a][1] === rowSpots[b][1]) {
+          for (const c of rowSpots[a])
+            for (const i of UNITS[9 + c]) {
+              const r = (i / 9) | 0;
+              if (r !== a && r !== b && (cands[i] & bit)) { cands[i] &= ~bit; progress = true; }
+            }
+        }
+    for (let a = 0; a < colSpots.length; a++)
+      for (let b = a + 1; b < colSpots.length; b++)
+        if (colSpots[a][0] === colSpots[b][0] && colSpots[a][1] === colSpots[b][1]) {
+          for (const r of colSpots[a])
+            for (const i of UNITS[r]) {
+              const c = i % 9;
+              if (c !== a && c !== b && (cands[i] & bit)) { cands[i] &= ~bit; progress = true; }
+            }
+        }
+  }
+  return progress;
+}
+
+// Rate a puzzle: returns 1..4 (tier), or 0 on contradiction.
+// maxTier caps escalation (used during digging): stops early once exceeded.
+function rateDifficulty(puzzle, maxTier = 4) {
+  const grid = puzzle.slice();
+  const cands = computeCands(grid);
+  let tier = 0;
+  const steps = [
+    [1, () => nakedSingles(grid, cands)],
+    [1, () => hiddenSingles(grid, cands)],
+    [2, () => lockedCandidates(cands)],
+    [3, () => subsetsTier3(grid, cands)],
+    [4, () => xWing(cands)],
+  ];
+  let solved = false;
+  while (!solved) {
+    let progressed = false;
+    for (const [t, fn] of steps) {
+      if (fn()) { tier = Math.max(tier, t); progressed = true; break; }
+    }
+    if (!progressed) break; // stuck: needs guessing -> beyond tier 4
+    solved = grid.every(v => v > 0);
+  }
+  return solved ? tier : 0;
+}
+
 /* --- Generation --------------------------------------------- */
 
 function generateSolved() {
@@ -311,39 +537,46 @@ function generateSolved() {
   return out;
 }
 
-// Clue targets per difficulty (fewer clues = harder)
-const DIFFICULTY_CLUES = { easy: 42, medium: 34, hard: 29, expert: 25 };
+// Target technique tiers per difficulty
+const DIFFICULTY_TIER = { easy: 1, medium: 2, hard: 3, expert: 4 };
 
 function generatePuzzle(difficulty) {
   const solution = generateSolved();
   const puzzle = solution.slice();
-  const target = DIFFICULTY_CLUES[difficulty];
+  const targetTier = DIFFICULTY_TIER[difficulty];
   const order = shuffle([...Array(81).keys()]);
-  let clues = 81;
 
   for (const idx of order) {
-    if (clues <= target) break;
     const saved = puzzle[idx];
     puzzle[idx] = 0;
     // Symmetric partner removal for aesthetics (optional attempt)
     let removedExtra = false;
     const mirror = 80 - idx;
-    if (puzzle[mirror] !== 0 && clues - 2 >= target - 4) {
+    if (puzzle[mirror] !== 0) {
       const mSaved = puzzle[mirror];
       puzzle[mirror] = 0;
-      if (countSolutions(puzzle, 2) === 1) {
-        clues -= 2;
+      if (countSolutions(puzzle, 2) === 1 && inTier(puzzle, targetTier)) {
         removedExtra = true;
       } else {
         puzzle[mirror] = mSaved;
       }
     }
     if (!removedExtra) {
-      if (countSolutions(puzzle, 2) === 1) clues--;
-      else puzzle[idx] = saved;
+      if (countSolutions(puzzle, 2) === 1 && inTier(puzzle, targetTier)) {
+        // keep removal
+      } else {
+        puzzle[idx] = saved;
+      }
     }
   }
   return { puzzle, solution };
+}
+
+// True when the puzzle is solvable purely by logic within the given tier
+// (rateDifficulty returns 0 if it gets stuck / needs guessing).
+function inTier(puzzle, targetTier) {
+  const t = rateDifficulty(puzzle, targetTier);
+  return t >= 1 && t <= targetTier;
 }
 
 /* --- Bitwise solution encoding ------------------------------- */
