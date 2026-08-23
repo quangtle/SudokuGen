@@ -51,13 +51,6 @@ function shuffle(a) {
 
 /* --- Fast bitmask backtracking solver ---------------------- */
 
-// Solve into `out` (first solution). Returns true if solvable.
-function solveFirst(cells, out) {
-  const grid = cells.slice();
-  if (!propagate(grid)) return false;
-  return search(grid, out);
-}
-
 function propagate(grid) {
   // Simple repeated elimination pass; returns false on contradiction
   let changed = true;
@@ -72,7 +65,7 @@ function propagate(grid) {
       for (const p of BOX_PEERS[i]) if (grid[p] > 0) cand &= ~(1 << (grid[p] - 1));
       if (cand === 0) return false;
       if ((cand & (cand - 1)) === 0) { // single candidate
-        grid[i] = 32 - Math.clz32(cand); // bit position -> digit
+        grid[i] = lowBitPos(cand); // bit position -> digit
         changed = true;
       }
     }
@@ -98,7 +91,7 @@ function search(grid, out) {
     const bit = cand & -cand;
     cand ^= bit;
     const trial = grid.slice();
-    trial[best] = 32 - Math.clz32(bit);
+    trial[best] = lowBitPos(bit);
     if (search(trial, out)) return true;
   }
   return false;
@@ -109,6 +102,11 @@ function popcount(x) {
   x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
   return (((x + (x >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
 }
+
+// Bit position of the lowest set bit (1-based digit), e.g. lowBitPos(1<<3) === 4
+const lowBitPos = x => 32 - Math.clz32(x & -x);
+// Bit position of the highest set bit (1-based digit), e.g. highBitPos(0x1FF) === 9
+const highBitPos = x => 31 - Math.clz32(x);
 
 // Count solutions up to `limit` (used for uniqueness check)
 function countSolutions(cells, limit) {
@@ -134,7 +132,7 @@ function countSolutions(cells, limit) {
       const bit = cand & -cand;
       cand ^= bit;
       const trial = g.slice();
-      trial[best] = 32 - Math.clz32(bit);
+      trial[best] = lowBitPos(bit);
       dfs(trial);
     }
   })(grid);
@@ -187,7 +185,7 @@ function nakedSingles(grid, cands) {
   let progress = false;
   for (let i = 0; i < 81; i++) {
     if (grid[i] === 0 && popcount(cands[i]) === 1) {
-      place(grid, cands, i, 32 - Math.clz32(cands[i]));
+      place(grid, cands, i, lowBitPos(cands[i]));
       progress = true;
     }
   }
@@ -225,8 +223,8 @@ function lockedCandidates(cands) {
         const inBox = i => ((((i / 9) | 0) / 3 | 0) * 3 + ((i % 9) / 3 | 0)) === b;
         // rows are UNITS[0..8], columns are UNITS[9..17]
         const line = popcount(rows) === 1
-          ? UNITS[31 - Math.clz32(rows)]
-          : UNITS[9 + (31 - Math.clz32(cols))];
+          ? UNITS[highBitPos(rows)]
+          : UNITS[9 + highBitPos(cols)];
         for (const i of line)
           if (!inBox(i) && (cands[i] & bit)) { cands[i] &= ~bit; progress = true; }
       }
@@ -240,7 +238,7 @@ function lockedCandidates(cands) {
       let boxes = 0;
       for (const i of line) if (cands[i] & bit) boxes |= 1 << ((((i / 9) | 0) / 3 | 0) * 3 + ((i % 9) / 3 | 0));
       if (popcount(boxes) === 1) {
-        const box = UNITS[18 + (31 - Math.clz32(boxes))];
+        const box = UNITS[18 + highBitPos(boxes)];
         for (const i of box)
           if (!line.includes(i) && (cands[i] & bit)) { cands[i] &= ~bit; progress = true; }
       }
@@ -304,31 +302,42 @@ function xWing(cands) {
   let progress = false;
   for (let d = 1; d <= 9; d++) {
     const bit = 1 << (d - 1);
-    const rowSpots = [], colSpots = [];
+    // Rows where digit d has exactly 2 candidates, with the column numbers.
+    const rowSpots = [];
     for (let r = 0; r < 9; r++) {
       const cs = UNITS[r].filter(i => cands[i] & bit).map(i => i % 9);
-      if (cs.length === 2) rowSpots.push(cs);
+      if (cs.length === 2) rowSpots.push({ row: r, cols: cs });
     }
+    // Columns where digit d has exactly 2 candidates, with the row numbers.
+    const colSpots = [];
     for (let c = 0; c < 9; c++) {
       const rs = UNITS[9 + c].filter(i => cands[i] & bit).map(i => (i / 9) | 0);
-      if (rs.length === 2) colSpots.push(rs);
+      if (rs.length === 2) colSpots.push({ col: c, rows: rs });
     }
+    // Row-based X-Wing: two rows with candidates in the same two columns.
     for (let a = 0; a < rowSpots.length; a++)
       for (let b = a + 1; b < rowSpots.length; b++)
-        if (rowSpots[a][0] === rowSpots[b][0] && rowSpots[a][1] === rowSpots[b][1]) {
-          for (const c of rowSpots[a])
+        if (rowSpots[a].cols[0] === rowSpots[b].cols[0] &&
+            rowSpots[a].cols[1] === rowSpots[b].cols[1]) {
+          const r1 = rowSpots[a].row, r2 = rowSpots[b].row;
+          for (const c of rowSpots[a].cols)
             for (const i of UNITS[9 + c]) {
               const r = (i / 9) | 0;
-              if (r !== a && r !== b && (cands[i] & bit)) { cands[i] &= ~bit; progress = true; }
+              if (r !== r1 && r !== r2 && (cands[i] & bit))
+                { cands[i] &= ~bit; progress = true; }
             }
         }
+    // Column-based X-Wing: two columns with candidates in the same two rows.
     for (let a = 0; a < colSpots.length; a++)
       for (let b = a + 1; b < colSpots.length; b++)
-        if (colSpots[a][0] === colSpots[b][0] && colSpots[a][1] === colSpots[b][1]) {
-          for (const r of colSpots[a])
+        if (colSpots[a].rows[0] === colSpots[b].rows[0] &&
+            colSpots[a].rows[1] === colSpots[b].rows[1]) {
+          const c1 = colSpots[a].col, c2 = colSpots[b].col;
+          for (const r of colSpots[a].rows)
             for (const i of UNITS[r]) {
               const c = i % 9;
-              if (c !== a && c !== b && (cands[i] & bit)) { cands[i] &= ~bit; progress = true; }
+              if (c !== c1 && c !== c2 && (cands[i] & bit))
+                { cands[i] &= ~bit; progress = true; }
             }
         }
   }
@@ -370,17 +379,21 @@ function rateDifficulty(puzzle, maxTier = 5) {
 /* --- Generation --------------------------------------------- */
 
 function generateSolved() {
-  const grid = new Int8Array(81);
-  // Fill diagonal boxes randomly first (independent), then solve rest
-  for (let b = 0; b < 9; b += 3) {
-    const digits = shuffle([1,2,3,4,5,6,7,8,9]);
-    for (let dr = 0; dr < 3; dr++)
-      for (let dc = 0; dc < 3; dc++)
-        grid[(b + dr) * 9 + b + dc] = digits[dr * 3 + dc];
+  // Filling the three diagonal boxes with random permutations is
+  // overwhelmingly likely to leave a solvable grid, but retry a few times
+  // with fresh randomness before giving up (near-impossible to hit).
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const grid = new Int8Array(81);
+    for (let b = 0; b < 9; b += 3) {
+      const digits = shuffle([1,2,3,4,5,6,7,8,9]);
+      for (let dr = 0; dr < 3; dr++)
+        for (let dc = 0; dc < 3; dc++)
+          grid[(b + dr) * 9 + b + dc] = digits[dr * 3 + dc];
+    }
+    const out = new Int8Array(81);
+    if (search(grid, out)) return out;
   }
-  const out = new Int8Array(81);
-  if (!search(grid, out)) throw new Error("generation failed");
-  return out;
+  throw new Error("generation failed after retries");
 }
 
 // Target technique tiers per difficulty
